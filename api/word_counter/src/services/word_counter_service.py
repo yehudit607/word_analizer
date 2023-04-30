@@ -6,7 +6,7 @@ from api.infra.constants import InputType
 from api.models import WordCount
 from channels.db import database_sync_to_async
 from api.infra.base_utils import logger
-from api.celery import process_input_task
+from api.tasks import process_input_task
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 
@@ -26,14 +26,11 @@ class WordCounterService:
     @staticmethod
     async def get_or_create_word_statistic_and_increment(word):
         async with WordCounterService.get_db_semaphore():
-            print("hello from us")
             word_statistic, created = await database_sync_to_async(WordCount.objects.get_or_create)(word=word)
             await database_sync_to_async(word_statistic.increment)()
 
     @classmethod
     async def process_words(cls, words):
-        print("hello from 1")
-
         await asyncio.gather(*(cls.get_or_create_word_statistic_and_increment(word) for word in words))
 
     @classmethod
@@ -46,18 +43,21 @@ class WordCounterService:
         logger.debug(f"starting process input from url {url}")
         process_input_task.delay(InputType.URL, url)
 
-    @classmethod
-    def process_input(cls, input_type: InputType, input_data):
+    async def process_input_async(self, input_type: InputType, input_data):
         if input_type == InputType.STRING:
-            print("hello from 0")
-
-            words = cls.process_text(input_data)
-
-            asyncio.run(cls.process_words(words))
+            words = self.process_text(input_data)
+            await self.process_words_async(words)
         elif input_type == InputType.FILE:
-            cls.process_file(input_data)
+            async for line in self.read_line_by_line(input_data):
+                words = self.process_text(line)
+                await self.process_words_async(words)
         elif input_type == InputType.URL:
-            cls.process_url(input_data)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(input_data) as response:
+                    async for line in self.read_line_by_line_response(response):
+                        words = self.process_text(line)
+                        await self.process_words_async(words)
+        return str(input_type)
 
     @staticmethod
     async def read_line_by_line(file_obj):
