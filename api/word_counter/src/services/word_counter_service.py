@@ -6,7 +6,7 @@ from api.infra.constants import InputType
 from api.models import WordCount
 from channels.db import database_sync_to_async
 from api.infra.base_utils import logger
-from api.tasks import process_input_task
+import aiofiles
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 
@@ -33,40 +33,37 @@ class WordCounterService:
     async def process_words(cls, words):
         await asyncio.gather(*(cls.get_or_create_word_statistic_and_increment(word) for word in words))
 
-    @classmethod
-    def process_file(cls, file):
-        logger.debug(f"starting process input from file {file}")
-        process_input_task.delay(InputType.FILE, file)
-
-    @classmethod
-    def process_url(cls, url):
-        logger.debug(f"starting process input from url {url}")
-        process_input_task.delay(InputType.URL, url)
-
     async def process_input_async(self, input_type: InputType, input_data):
-        if input_type == InputType.STRING:
-            words = self.process_text(input_data)
-            await self.process_words_async(words)
-        elif input_type == InputType.FILE:
-            async for line in self.read_line_by_line(input_data):
-                words = self.process_text(line)
-                await self.process_words_async(words)
-        elif input_type == InputType.URL:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(input_data) as response:
-                    async for line in self.read_line_by_line_response(response):
+        try:
+            if input_type == InputType.STRING:
+                words = self.process_text(input_data)
+                await self.process_words(words)
+            elif input_type == InputType.FILE:
+                async with aiofiles.open(input_data, mode='r') as file:
+                    async for line in self.read_line_by_line(file):
                         words = self.process_text(line)
-                        await self.process_words_async(words)
-        return str(input_type)
+                        await self.process_words(words)
+            elif input_type == InputType.URL:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(input_data) as response:
+                        if response.status != 200:
+                            raise Exception(f"Failed to fetch URL content. Status code: {response.status}")
+                        async for line in self.read_line_by_line_response(response):
+                            words = self.process_text(line)
+                            await self.process_words(words)
+            return str(input_type)
+        except Exception as e:
+            logger.error(f"Error processing input of type {input_type}: {e}")
+            raise
 
     @staticmethod
     async def read_line_by_line(file_obj):
         buffer = ''
         while True:
-            data = await asyncio.to_thread(file_obj.read, CHUNK_SIZE)
+            data = await file_obj.readline()
             if not data:
                 break
-            buffer += data.decode('utf-8')
+            buffer += data
             lines = buffer.splitlines(keepends=True)
             for line in lines[:-1]:
                 yield line

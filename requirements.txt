@@ -7,3 +7,4 @@ drf-yasg
 channels
 celery
 redis
+aiofiles

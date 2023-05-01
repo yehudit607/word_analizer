@@ -15,7 +15,7 @@ class WordCounterView(APIView):
 
         input_data = {
             'string': serializer.validated_data.get('text'),
-            'file': request.FILES.get('file'),
+            'file_path': serializer.validated_data.get('file_path'),
             'url': serializer.validated_data.get('url'),
         }
 
@@ -24,22 +24,10 @@ class WordCounterView(APIView):
         if not input_value:
             return JsonResponse({"detail": "No input provided."}, status=HTTPStatus.BAD_REQUEST)
 
-        if input_type == 'file':
-            input_value = self._handle_file_input(input_value)
-
         try:
             word_counter_service = WordCounterService()
             await word_counter_service.process_input_async(input_type, input_value)
             return JsonResponse({"detail": "Word counting completed."}, status=HTTPStatus.OK)
         except Exception as e:
             return JsonResponse({"detail": f"An error occurred: {str(e)}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
-
-    @staticmethod
-    def _handle_file_input(input_value):
-        if hasattr(input_value, 'temporary_file_path'):
-            return input_value.temporary_file_path()
-        else:
-            # If the file is small and stored in memory, read the content
-            return io.StringIO(input_value.read().decode('utf-8'))
-
 
